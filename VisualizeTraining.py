@@ -1,7 +1,8 @@
 
 import time
+import sys
 
-isHeadless = False
+isHeadless = True
 if (not isHeadless):
     import pg_widgets as pw
 
@@ -112,6 +113,68 @@ def format_time(seconds: float) -> str:
         sec = int(seconds % 3600) % 60
         return f"{hours}:{minutes:02d}:{sec:02d}"
 
+def print_training_status(bestScores, avgScores, validationScores, progress, tail=5, bar_length=30):
+    # This function is made by ChatGPT
+
+    """
+    Prints a live-updating training summary (single refresh call).
+
+    Args:
+        bestScores (list)
+        avgScores (list)
+        validationScores (list)
+        progress (float): 0.0 → 1.0
+        tail (int): how many recent values to show
+        bar_length (int): length of progress bar
+    """
+
+    def format_tail(lst):
+        return lst[-tail:] if len(lst) >= tail else lst
+
+    def safe_stats(lst):
+        if not lst:
+            return None, None, None
+        return lst[-1], min(lst), max(lst)
+
+    def progress_bar(p):
+        p = max(0.0, min(1.0, p))  # clamp
+        filled = int(bar_length * p)
+        bar = "#" * filled + "-" * (bar_length - filled)
+        return f"[{bar}] {p*100:6.2f}%"
+
+    # Stats
+    best, best_min, best_max = safe_stats(bestScores)
+    avg, avg_min, avg_max = safe_stats(avgScores)
+    val, val_min, val_max = safe_stats(validationScores)
+
+    output = (
+        f"--- Training Status ---\n"
+        f"Progress: {progress_bar(progress)}\n\n"
+
+        f"Best Score\n"
+        f"  Latest: {best}\n"
+        f"  Min   : {best_min}\n"
+        f"  Max   : {best_max}\n"
+        f"  Recent: {format_tail(bestScores)}\n\n"
+
+        f"Avg Score\n"
+        f"  Latest: {avg}\n"
+        f"  Min   : {avg_min}\n"
+        f"  Max   : {avg_max}\n"
+        f"  Recent: {format_tail(avgScores)}\n\n"
+
+        f"Validation Score\n"
+        f"  Latest: {val}\n"
+        f"  Min   : {val_min}\n"
+        f"  Max   : {val_max}\n"
+        f"  Recent: {format_tail(validationScores)}\n"
+    )
+
+    # Clear + redraw
+    sys.stdout.write("\033[H\033[J")
+    sys.stdout.write(output)
+    sys.stdout.flush()
+
 def runProgram():
 
     pythonToCPP = getPythonToCPP()
@@ -122,45 +185,51 @@ def runProgram():
         controlManager = getControlManager()
 
     prevNetworkIteration = 0
-    while True:
-        if (not isHeadless):
-            if (not controlManager.isRunning()): break
-            controlManager.update()
-        trainingInfo = trainingLib.getInfo()
 
-        numChanges = 5000
-        temperature = 0.1
-        if (not isHeadless):
+    try:
+        while True:
+            if (not isHeadless):
+                if (not controlManager.isRunning()): break
+                controlManager.update()
+            trainingInfo = trainingLib.getInfo()
+
+            numChanges = 5000
+            temperature = 0.1
+
             y_valuesAvg = trainingInfo.avgScores
             y_valuesBest = trainingInfo.bestScores
             y_valuesValidation = trainingInfo.validationScores
-            x_values = [x for x in range(len(y_valuesBest))]
+            progress = trainingInfo.finishedNetworksThisIter / pythonToCPP.networksPerIter
+            if (not isHeadless):
+                x_values = [x for x in range(len(y_valuesBest))]
 
-            controlManager["plotValidation"].setValue(x_values, y_valuesValidation, maxLength = 1000)
-            controlManager["plotBest"].setValue(x_values, y_valuesBest, maxLength = 1000)
-            controlManager["plotAvg"].setValue(x_values, y_valuesAvg, maxLength = 1000)
-            controlManager["progressBar"].setValue(trainingInfo.finishedNetworksThisIter / pythonToCPP.networksPerIter)
+                controlManager["plotValidation"].setValue(x_values, y_valuesValidation, maxLength = 1000)
+                controlManager["plotBest"].setValue(x_values, y_valuesBest, maxLength = 1000)
+                controlManager["plotAvg"].setValue(x_values, y_valuesAvg, maxLength = 1000)
+                controlManager["progressBar"].setValue(progress)
 
-            controlManager["iterationText"].setText(f"Iteration: {trainingInfo.finishedIterations}")
-            controlManager["fpsText"].setText(f"FPS: {1.0 / controlManager.getRenderTime():.2f}")
-            controlManager["totalTrainingTime"].setText(f"Total Training Time: {format_time(time.perf_counter() - trainingStartTime)}")
+                controlManager["iterationText"].setText(f"Iteration: {trainingInfo.finishedIterations}")
+                controlManager["fpsText"].setText(f"FPS: {1.0 / controlManager.getRenderTime():.2f}")
+                controlManager["totalTrainingTime"].setText(f"Total Training Time: {format_time(time.perf_counter() - trainingStartTime)}")
 
-            numChanges = int(controlManager["sliderNumChanges"].getValue())
-            temperature = controlManager["sliderTemperature"].getValue()
-            controlManager["textNumChanges"].setText(f"Num changes: {numChanges}")
-            controlManager["textTemperature"].setText(f"Temperature: {temperature:.5f}")
+                numChanges = int(controlManager["sliderNumChanges"].getValue())
+                temperature = controlManager["sliderTemperature"].getValue()
+                controlManager["textNumChanges"].setText(f"Num changes: {numChanges}")
+                controlManager["textTemperature"].setText(f"Temperature: {temperature:.5f}")
 
-            if (trainingInfo.finishedIterations > prevNetworkIteration):
-                prevNetworkIteration = trainingInfo.finishedIterations
-                controlManager["sliderTemperature"].changeValues(-5, 5, temperature * 0.9999)
+                if (trainingInfo.finishedIterations > prevNetworkIteration):
+                    prevNetworkIteration = trainingInfo.finishedIterations
+                    controlManager["sliderTemperature"].changeValues(-5, 5, temperature * 0.9999)
 
-        pythonToCPP.numChanges = numChanges
-        pythonToCPP.temperature = temperature
-        trainingLib.setInfo(pythonToCPP)
+            pythonToCPP.numChanges = numChanges
+            pythonToCPP.temperature = temperature
+            trainingLib.setInfo(pythonToCPP)
 
-        if (isHeadless):
-            time.sleep(1.0)
-
+            if (isHeadless):
+                print_training_status(y_valuesBest, y_valuesAvg, y_valuesValidation, progress)
+                time.sleep(1.0)
+    except KeyboardInterrupt:
+        pass
 
     trainingLib.stop()
 
